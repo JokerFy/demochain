@@ -28,6 +28,7 @@ func (bc *Blockchain) ApendBlock(newBlock *Block) {
 		bc.Blocks = append(bc.Blocks, newBlock)
 		return
 	}
+
 	if isValid(*newBlock, *bc.Blocks[len(bc.Blocks)-1]) {
 		bc.Blocks = append(bc.Blocks, newBlock)
 	} else {
@@ -42,6 +43,9 @@ func (bc *Blockchain) Print() {
 		fmt.Printf("Curr.Hash: %s\n", block.Hash)
 		fmt.Printf("Data: %s\n", block.Data)
 		fmt.Printf("Timestamp: %d\n", block.Timestamp)
+		fmt.Printf("Nonce: %d\n", block.Nonce)
+		fmt.Printf("\n")
+		fmt.Printf("\n")
 	}
 }
 
