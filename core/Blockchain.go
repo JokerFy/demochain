@@ -1,63 +1,108 @@
 package core
 
 import (
-	"fmt"
+	"github.com/boltdb/bolt"
 	"log"
 )
 
+/**
+让我们从 NewBlockchain 函数开始。在之前的实现中，NewBlockchain 会创建一个新的 Blockchain 实例，并向其中加入创世块。而现在，我们希望它做的事情有：
+打开一个数据库文件
+检查文件里面是否已经存储了一个区块链
+如果已经存储了一个区块链：
+创建一个新的 Blockchain 实例
+设置 Blockchain 实例的 tip 为数据库中存储的最后一个块的哈希
+如果没有区块链：
+创建创世块
+存储到数据库
+将创世块哈希保存为最后一个块的哈希
+创建一个新的 Blockchain 实例，初始时 tip 指向创世块（tip 有尾部，尖端的意思，在这里 tip 存储的是最后一个块的哈希）
+*/
+
+const dbFile = "/Users/finley/go-project/demochain/data/blockchain/blockchain.db"
+const blocksBucket = "blocks"
+const genesisCoinbaseData = "这是创世区块的内容"
+
 type Blockchain struct {
-	Blocks []*Block
+	Tip []byte
+	Db  *bolt.DB
 }
 
 //生成新的区块链
 func NewBlockchain() *Blockchain {
-	gensisBlock := GenerateGenesisBlock()
-	blockchain := Blockchain{}
-	blockchain.ApendBlock(&gensisBlock)
-	return &blockchain
+	/*	gensisBlock := GenerateGenesisBlock()
+		blockchain := Blockchain{}
+		blockchain.ApendBlock(&gensisBlock)
+		return &blockchain
+	*/
+	var tip []byte
+	db, err := bolt.Open(dbFile, 0600, nil)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+
+		if b == nil {
+			genesis := GenerateGenesisBlock()
+			b, err := tx.CreateBucket([]byte(blocksBucket))
+			if err != nil {
+				log.Fatal(err)
+			}
+			err = b.Put(genesis.Hash, genesis.Serialize())
+			err = b.Put([]byte("l"), genesis.Hash)
+			tip = genesis.Hash
+		} else {
+			tip = b.Get([]byte("l"))
+		}
+
+		return nil
+	})
+
+	bc := Blockchain{tip, db}
+
+	return &bc
 }
 
-func (bc *Blockchain) SendDdata(data string) {
-	preBlock := bc.Blocks[len(bc.Blocks)-1]
-	newBlock := GenereateNewBlock(*preBlock, data)
-	bc.ApendBlock(&newBlock)
+func (bc *Blockchain) AddBlock(data string) {
+	var lastHash []byte
+
+	err := bc.Db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		lastHash = b.Get([]byte("l"))
+
+		return nil
+	})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	newBlock := NewBlock(data, lastHash)
+
+	err = bc.Db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+
+		err := b.Put(newBlock.Hash, newBlock.Serialize())
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		err = b.Put([]byte("l"), newBlock.Hash)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		bc.Tip = newBlock.Hash
+
+		return nil
+	})
 }
 
-func (bc *Blockchain) ApendBlock(newBlock *Block) {
-	if len(bc.Blocks) == 0 {
-		bc.Blocks = append(bc.Blocks, newBlock)
-		return
-	}
+func (bc *Blockchain) Iterator() *BlockchainIterator {
+	bci := &BlockchainIterator{bc.Tip, bc.Db}
 
-	if isValid(*newBlock, *bc.Blocks[len(bc.Blocks)-1]) {
-		bc.Blocks = append(bc.Blocks, newBlock)
-	} else {
-		log.Fatal("invalid block")
-	}
-}
-
-func (bc *Blockchain) Print() {
-	for _, block := range bc.Blocks {
-		fmt.Printf("Index: %d\n", block.Index)
-		fmt.Printf("Prev.Hash: %s\n", block.PrevBlockHash)
-		fmt.Printf("Curr.Hash: %s\n", block.Hash)
-		fmt.Printf("Data: %s\n", block.Data)
-		fmt.Printf("Timestamp: %d\n", block.Timestamp)
-		fmt.Printf("Nonce: %d\n", block.Nonce)
-		fmt.Printf("\n")
-		fmt.Printf("\n")
-	}
-}
-
-func isValid(newBlock Block, oldBlock Block) bool {
-	if newBlock.Index-1 != oldBlock.Index {
-		return false
-	}
-	if newBlock.PrevBlockHash != oldBlock.Hash {
-		return false
-	}
-	if calculateHash(newBlock) != newBlock.Hash {
-		return false
-	}
-	return true
+	return bci
 }

@@ -1,12 +1,15 @@
 package core
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
-	"time"
+)
+
+var (
+	maxNonce = math.MaxInt64
 )
 
 type ProofOfWork struct {
@@ -24,31 +27,53 @@ func NewProofOfWork(b *Block) *ProofOfWork {
 	return pow
 }
 
-func (pow *ProofOfWork) prepareData(nonce int64) string {
-	data := string(pow.block.Index) + string(pow.block.Timestamp) + string(pow.block.PrevBlockHash) + string(pow.block.Data) + string(nonce)
-	hashInBytes := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(hashInBytes[:])
+func (pow *ProofOfWork) prepareData(nonce int) []byte {
+	data := bytes.Join(
+		[][]byte{
+			pow.block.PrevBlockHash,
+			pow.block.Data,
+			IntToHex(pow.block.Timestamp),
+			IntToHex(int64(targetBits)),
+			IntToHex(int64(nonce)),
+		},
+		[]byte{},
+	)
+
+	return data
 }
 
-func (pow *ProofOfWork) Run() (int64, string) {
+func (pow *ProofOfWork) Run() (int, []byte) {
+	var hashInt big.Int
+	var hash [32]byte
 	nonce := 0
-	t1 := time.Now().UnixNano()
-	var hashVar string
-	for nonce < math.MaxInt64 {
-		data := pow.prepareData(int64(nonce))
 
-		if data[0:4] == "0000" {
-			hashVar = data
+	fmt.Printf("Mining the block containing \"%s\"\n", pow.block.Data)
+	for nonce < maxNonce {
+		data := pow.prepareData(nonce)
+		hash = sha256.Sum256(data)
+		hashInt.SetBytes(hash[:])
+
+		if hashInt.Cmp(pow.target) == -1 {
+			fmt.Printf("\r%x", hash)
 			break
 		} else {
 			nonce++
 		}
 	}
+	fmt.Print("\n\n")
 
-	fmt.Println(nonce)
-	fmt.Printf("PoW Duration:%.3fs\n", float64((time.Now().UnixNano()-t1)/1e6)/1000)
+	return nonce, hash[:]
+}
 
-	fmt.Printf("\n\n")
+// Validate validates block's PoW
+func (pow *ProofOfWork) Validate() bool {
+	var hashInt big.Int
 
-	return int64(nonce), hashVar
+	data := pow.prepareData(pow.block.Nonce)
+	hash := sha256.Sum256(data)
+	hashInt.SetBytes(hash[:])
+
+	isValid := hashInt.Cmp(pow.target) == -1
+
+	return isValid
 }

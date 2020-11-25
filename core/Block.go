@@ -1,48 +1,66 @@
 package core
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/gob"
+	"log"
+	"strconv"
 	"time"
 )
 
 type Block struct {
-	Index         int64  //区块编号
 	Timestamp     int64  //区块时间戳
-	PrevBlockHash string //上一个区块哈希值
-	Hash          string //当前区块哈希值
-	Data          string //区块数据
-	Nonce         int64  // 随机数
+	PrevBlockHash []byte //上一个区块哈希值
+	Hash          []byte //当前区块哈希值
+	Data          []byte //区块数据
+	Nonce         int    // 随机数
 }
 
-func calculateHash(b Block) string {
-	blockDdata := string(b.Index) + string(b.Timestamp) + string(b.PrevBlockHash) + string(b.Data) + string(b.Nonce)
-	hashInBytes := sha256.Sum256([]byte(blockDdata))
-	return hex.EncodeToString(hashInBytes[:])
+func (b *Block) SetHash() {
+	timestamp := []byte(strconv.FormatInt(b.Timestamp, 10))
+	headers := bytes.Join([][]byte{b.PrevBlockHash, b.Data, timestamp}, []byte{})
+	hash := sha256.Sum256(headers)
+
+	b.Hash = hash[:]
 }
 
-func GenereateNewBlock(preBlock Block, data string) Block {
-
-	newBlock := Block{}
-	newBlock.Index = preBlock.Index + 1
-	newBlock.PrevBlockHash = preBlock.Hash
-	newBlock.Timestamp = time.Now().Unix()
-	newBlock.Data = data
-	newBlock.Nonce = 0
-	newBlock.Hash = calculateHash(newBlock)
-
-	pow := NewProofOfWork(&newBlock)
+func NewBlock(data string, prevBlockHash []byte) *Block {
+	block := &Block{time.Now().Unix(), prevBlockHash, []byte{}, []byte(data), 0}
+	pow := NewProofOfWork(block)
 	nonce, hash := pow.Run()
 
-	newBlock.Nonce = nonce
-	newBlock.Hash = hash
+	block.Hash = hash[:]
+	block.Nonce = nonce
 
-	return newBlock
+	return block
 }
 
-func GenerateGenesisBlock() Block {
-	preBlock := Block{}
-	preBlock.Index = -1
-	preBlock.Hash = ""
-	return GenereateNewBlock(preBlock, "Genesis Block")
+func GenerateGenesisBlock() *Block {
+	return NewBlock("Genesis Block", []byte{})
+}
+
+//将区块序列化成字节以便于存储于boltdb数据库
+func (b *Block) Serialize() []byte {
+	var result bytes.Buffer
+	encoder := gob.NewEncoder(&result)
+
+	err := encoder.Encode(b)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return result.Bytes()
+}
+
+//解码
+func DeserializeBlock(d []byte) *Block {
+	var block Block
+
+	decoder := gob.NewDecoder(bytes.NewReader(d))
+	err := decoder.Decode(&block)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return &block
 }
