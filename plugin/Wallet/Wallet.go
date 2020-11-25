@@ -1,138 +1,63 @@
 package Wallet
 
 import (
+	"bytes"
 	"crypto/ecdsa"
-	"crypto/elliptic"
-	"fmt"
-	"io/ioutil"
-	"time"
-
-	"crypto/x509"
-	"encoding/pem"
-	"errors"
-	mathRand "math/rand"
-	"os"
-	"strings"
+	"demochain/core"
 )
+
+//用于生成地址的版本
+const Version = byte(0x00)
+
+//用于生成地址的校验和位数
+const AddressChecksumLen = 4
 
 type Wallet struct {
-	privateKey string
-	publicKey  string
+	PrivateKey ecdsa.PrivateKey
+	PublicKey  []byte
 }
 
-func GetWallet() {
-	randkey := GetRandomString(36)
-	pubKey, priKey, _ := GenerateKey(randkey)
-	fmt.Print(pubKey, priKey)
+//1.新建钱包
+func NewWallet() *Wallet {
+	private, public := newKeyPair()
+	wallet := Wallet{private, public}
+
+	return &wallet
 }
 
-const (
-	PRIVATEFILE = "./ecdsa/privateKey.pem"
-	PUBLICFILE  = "./ecdsa/publicKey.pem"
-)
+//2.获取钱包地址 根据公钥生成地址
+func (wallet *Wallet) GetAddress() []byte {
 
-//生成指定math/rand字节长度的随机字符串
-func GetRandomString(length int) string {
-	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ~!@#$%^&*()_+?=-"
-	bytes := []byte(str)
-	result := []byte{}
+	//1.使用RIPEMD160(SHA256(PubKey)) 哈希算法，取公钥并对其哈希两次
+	ripemd160Hash := Ripemd160Hash(wallet.PublicKey)
+	//2.拼接版本
+	version_ripemd160Hash := append([]byte{Version}, ripemd160Hash...)
+	//3.两次sha256生成校验和
+	checkSumBytes := CheckSum(version_ripemd160Hash)
+	//4.拼接校验和
+	b2 := append(version_ripemd160Hash, checkSumBytes...)
 
-	r := mathRand.New(mathRand.NewSource(time.Now().UnixNano()))
-	for i := 0; i < length; i++ {
-		result = append(result, bytes[r.Intn(len(bytes))])
-	}
-	return string(result)
+	//5.base58编码
+	return core.Base58Encode(b2)
 }
 
-//生成ECC算法的公钥和私钥文件
-//根据随机字符串生成，randKey至少36位
-func GenerateKey(randKey string) (string, string, error) {
+//5.判断地址是否有效
+func (wallet *Wallet) IsValidForAddress(address []byte) bool {
 
-	var err error
-	var privateKey *ecdsa.PrivateKey
-	var publicKey ecdsa.PublicKey
-	var curve elliptic.Curve
+	//1.base58解码地址得到版本，公钥哈希和校验位拼接的字节数组
+	version_publicKey_checksumBytes := core.Base58Decode(address)
+	//2.获取校验位和version_publicKeHash
+	checkSumBytes := version_publicKey_checksumBytes[len(version_publicKey_checksumBytes)-AddressChecksumLen:]
+	version_ripemd160 := version_publicKey_checksumBytes[:len(version_publicKey_checksumBytes)-AddressChecksumLen]
 
-	//一、生成私钥文件
+	//3.重新用解码后的version_ripemd160获得校验和
+	checkSumBytesNew := CheckSum(version_ripemd160)
 
-	//根据随机字符串长度设置curve曲线
-	length := len(randKey)
-	//elliptic包实现了几条覆盖素数有限域的标准椭圆曲线,Curve代表一个短格式的Weierstrass椭圆曲线，其中a=-3
-	if length < 224/8 {
-		err = errors.New("私钥长度太短，至少为36位！")
-		return "", "", err
+	//4.比较解码生成的校验和CheckSum重新计算的校验和
+	if bytes.Compare(checkSumBytes, checkSumBytesNew) == 0 {
+
+		return true
 	}
 
-	if length >= 521/8+8 {
-		//长度大于73字节，返回一个实现了P-512的曲线
-		curve = elliptic.P521()
-	} else if length >= 384/8+8 {
-		//长度大于56字节，返回一个实现了P-384的曲线
-		curve = elliptic.P384()
-	} else if length >= 256/8+8 {
-		//长度大于40字节，返回一个实现了P-256的曲线
-		curve = elliptic.P256()
-	} else if length >= 224/8+8 {
-		//长度大于36字节，返回一个实现了P-224的曲线
-		curve = elliptic.P224()
-	}
-
-	//GenerateKey方法生成私钥
-	privateKey, err = ecdsa.GenerateKey(curve, strings.NewReader(randKey))
-	if err != nil {
-		return "", "", err
-	}
-	//通过x509标准将得到的ecc私钥序列化为ASN.1的DER编码字符串
-	privateBytes, err := x509.MarshalECPrivateKey(privateKey)
-	if err != nil {
-		return "", "", err
-	}
-	//将私钥字符串设置到pem格式块中
-	privateBlock := pem.Block{
-		Type:  "ecc private key",
-		Bytes: privateBytes,
-	}
-
-	//通过pem将设置好的数据进行编码，并写入磁盘文件
-	privateFile, err := os.Create(PRIVATEFILE)
-	if err != nil {
-		return "", "", err
-	}
-	defer privateFile.Close()
-	err = pem.Encode(privateFile, &privateBlock)
-	if err != nil {
-		return "", "", err
-	}
-
-	//二、生成公钥文件
-	//从得到的私钥对象中将公钥信息取出
-	publicKey = privateKey.PublicKey
-
-	//通过x509标准将得到的ecc公钥序列化为ASN.1的DER编码字符串
-	publicBytes, err := x509.MarshalPKIXPublicKey(&publicKey)
-	if err != nil {
-		return "", "", err
-	}
-	//将公钥字符串设置到pem格式块中
-	publicBlock := pem.Block{
-		Type:  "ecc public key",
-		Bytes: publicBytes,
-	}
-
-	//通过pem将设置好的数据进行编码，并写入磁盘文件
-	publicFile, err := os.Create(PUBLICFILE)
-	if err != nil {
-		return "", "", err
-	}
-	err = pem.Encode(publicFile, &publicBlock)
-	if err != nil {
-		return "", "", err
-	}
-
-	bytes, err := ioutil.ReadFile(PUBLICFILE)
-	publicKeyVal := string(bytes)
-
-	bytes2, err := ioutil.ReadFile(PRIVATEFILE)
-	priKeyVal := string(bytes2)
-	return publicKeyVal, priKeyVal, err
+	return false
 }
