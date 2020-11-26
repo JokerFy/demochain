@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/gob"
 	"log"
-	"strconv"
 	"time"
 )
 
@@ -13,20 +12,17 @@ type Block struct {
 	Timestamp     int64  //区块时间戳
 	PrevBlockHash []byte //上一个区块哈希值
 	Hash          []byte //当前区块哈希值
-	Data          []byte //区块数据
-	Nonce         int    // 随机数
+	Transactions  []*Transaction
+	Nonce         int // 随机数
 }
 
-func (b *Block) SetHash() {
-	timestamp := []byte(strconv.FormatInt(b.Timestamp, 10))
-	headers := bytes.Join([][]byte{b.PrevBlockHash, b.Data, timestamp}, []byte{})
-	hash := sha256.Sum256(headers)
-
-	b.Hash = hash[:]
-}
-
-func NewBlock(data string, prevBlockHash []byte) *Block {
-	block := &Block{time.Now().Unix(), prevBlockHash, []byte{}, []byte(data), 0}
+func NewBlock(transactions []*Transaction, prevBlockHash []byte) *Block {
+	block := &Block{
+		Timestamp:     time.Now().Unix(),
+		Transactions:  transactions,
+		PrevBlockHash: prevBlockHash,
+		Hash:          []byte{},
+		Nonce:         0}
 	pow := NewProofOfWork(block)
 	nonce, hash := pow.Run()
 
@@ -36,8 +32,9 @@ func NewBlock(data string, prevBlockHash []byte) *Block {
 	return block
 }
 
-func GenerateGenesisBlock() *Block {
-	return NewBlock("Genesis Block", []byte{})
+// NewGenesisBlock creates and returns Genesis Block
+func NewGenesisBlock(coinbase *Transaction) *Block {
+	return NewBlock([]*Transaction{coinbase}, []byte{})
 }
 
 //将区块序列化成字节以便于存储于boltdb数据库
@@ -63,4 +60,16 @@ func DeserializeBlock(d []byte) *Block {
 		log.Fatal(err)
 	}
 	return &block
+}
+
+func (b *Block) HashTransactions() []byte {
+	var txHashes [][]byte
+	var txHash [32]byte
+
+	for _, tx := range b.Transactions {
+		txHashes = append(txHashes, tx.ID)
+	}
+	txHash = sha256.Sum256(bytes.Join(txHashes, []byte{}))
+
+	return txHash[:]
 }
